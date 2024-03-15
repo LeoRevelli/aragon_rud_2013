@@ -1,0 +1,463 @@
+library(haven)
+data_person_4 <- read_dta("C:/Users/leore/OneDrive/Bureau/Master 2 - ENS/Econometrics/114819-V1/data/main_results/data_person_4.dta")
+library(tidyr)
+library(dplyr)
+library(lmtest)
+library(sandwich)
+library(pander)
+library(plm)
+library(stargazer)
+library(knitr)
+library(kableExtra)
+library(modelsummary)
+library(ggplot2)
+library(reshape2)
+library(stats)
+library(miceadds)
+library(estimatr)
+library(pracma)
+library(plotrix)
+library(fastDummies)
+library(caret)
+library(stringr)
+
+#we know that head of households have the codperso=1 and ocu500=1 (which means occupied)
+"we construct dataset of households"
+h1 <- subset(data_person_4, data_person_4$ocu500==1 & data_person_4$codperso=='1')
+h1 <- subset(h1, schooling != "NA") 
+
+#####-----------------------------
+##Figure 1 and 2 - Expansion of the mine and increase of local expenditures
+#Fig1: Variation of number of workers
+fig1df <- subset(data_person_4, select = c("workers_yana","workers_contract","workers_total","year"))
+fig1year=fig1df[!duplicated(fig1df$workers_contract), ]   #we remove duplicated rows
+plot(fig1year$year,fig1year$workers_total,type="o", col=1, pch="o",ylab="Number of workers",xlab="year",lty=1, ylim=c(0,14000))
+lines(fig1year$year,fig1year$workers_contract,type="o", col=2,pch='o', lty=1)
+lines(fig1year$year,fig1year$workers_yana,type="o", col=3,pch='o', lty=1)
+legend(x = "topleft", legend=c("Total workers", "Contractors", "Directly employed"),  
+       fill = c("black","red","green"))
+#Fig2: Production and local procurement
+fig1dfb <- subset(data_person_4, select = c("ya_w_g","ya_prod","year"))
+fig1yearb=fig1dfb[!duplicated(fig1dfb$year), ]            #we remove duplicated rows
+twoord.plot(fig1yearb$year,fig1yearb$ya_w_g,fig1yearb$year,fig1yearb$ya_prod, ylab="US$ mn", rylab="Ounces mn", xlab="year",ylab.at = 120000,lylim=c(20000,200000), rylim=c(0.5,3.5))
+axis(2,col="black",las=1)  ## las=1 makes horizontal labels
+legend(x = "topleft", legend=c("Quantity (Ounces mn)", "Wage bill and local purchases (US$ mn)"),  
+       fill = c("black","red"))
+
+#---------------------------
+#Figure3 : conditional mean of real income
+#we use residuals of lm as the mean of y_rel conditionnal on schooling, age, isfemale, electricity, water. Indeed, OLS is a mean prediction,
+#and residual is the part of the mean that is unexplained by regressors (i.e the conditionnal mean of real income (y_rel))
+model <- lm(y_rel ~ schooling + age + isfemale + electricity + water, data = h1, weights =h1$factor)
+h1$residuals <- residuals(model)
+#compute conditional mean of residuals by year
+conditional_means <- h1 %>%
+  group_by(year, d2) %>%
+  summarize(mean_residual = mean(residuals, na.rm = TRUE))
+#plot
+ggplot(conditional_means, aes(x = year, y = mean_residual, color = as.factor(d2))) +
+  geom_line() +
+  labs(x = "Year",
+       y = "Conditional Mean of real income",
+       color = "Distance from Cajamarca city") +
+  scale_color_manual(labels = c("Distance > 100km","Distance < 100km"), values = c("blue", "red")) + 
+  theme_minimal()
+#-------------------------------------------
+#HOUSEHOLD HEAD AND HOUSEHOLD DESCRPTIVE STATISTICS
+#we start by computing the mean of variables of interest
+col_mean <- c(mean(hse$schooling),mean(hse$age),mean(hse$isfemale)*100,mean(hse$y),
+                  mean(hse$expen),mean(hse$linea),mean(hse$poor)*100,mean(hse$poor_ext)*100,
+                  mean(hse$urban)*100,mean(hse$electricity)*100,mean(hse$water)*100,mean(hse$mieperho),
+                  mean(hse$percepho),mean(hse$dist_caja_r))
+#standard errors
+hse <- subset(h1, select = c("schooling", "age", "isfemale", "y", "expen", "linea", "poor", "poor_ext", "urban", "electricity",
+                             "water", "mieperho", "percepho", "dist_caja_r" ) )
+se= c(plotrix::std.error(hse$schooling),plotrix::std.error(hse$age),plotrix::std.error(hse$isfemale)*100,plotrix::std.error(hse$y),
+      plotrix::std.error(hse$expen),plotrix::std.error(hse$linea),plotrix::std.error(hse$poor)*100,plotrix::std.error(hse$poor_ext)*100,
+      plotrix::std.error(hse$urban)*100,plotrix::std.error(hse$electricity)*100,plotrix::std.error(hse$water)*100,plotrix::std.error(hse$mieperho),
+      plotrix::std.error(hse$percepho),plotrix::std.error(hse$dist_caja_r)) #we multiply by 100 variables which are percent
+
+#compute descriptive statistics table
+varnames=c("schooling", "age", "isfemale", "y", "expen", "linea", "poor", "poor_ext", "urban", "electricity",
+           "water", "mieperho", "percepho", "dist_caja_r")
+stat_des <- do.call(rbind, Map(data.frame,Variable=varnames, Mean=col_mean, Standard_error=se))
+kable(stat_des) %>% kable_material(c("striped", "hover"))
+rownames(stat_des) <- c("Years of education","Age","Percent female"," Income per capita", "Consumption per capita","Poverty line","Percent poor",
+                  "Percent extreme poor","Percent urban","Percent access to electricity","Percent access to piped water","Number Household members",
+                  "Number income earners","Distance to Cajamarca city (km)")
+kable(stat_des, format = "latex", booktabs = T, longtable=F, caption = "Table 1 : Mean of main variables at household level",digits = 3) %>% kable_material(c("striped", "hover")) %>%
+kable_styling() %>%
+  add_footnote("Mean and standard errors are calculated using sample mean weights and clustered by primary sample unit. We have, as in Aragon and Rud (2013), 7738 observations across households", notation="alphabet")
+
+#FIRMS DESCRIPTIVE STATISTICS
+f1 <- subset(data_person_4, select = c("year","ya_wages","ya_co_caj","ya_prod", "ya_com_loc"))
+varnames.f=c("ya_wages","ya_co_caj","ya_prod", "ya_com_loc")
+firm <- f1[!duplicated(f1), ] #it is as doing a collapse. We know that variables below have the same value accross obsevrations and their
+                              # values change accross years so delete all rows with the same value and we result to one observation for each year
+firm1=subset(firm, select=c("ya_wages","ya_co_caj","ya_prod", "ya_com_loc"))
+fcol_mean <- colMeans(firm1[c("ya_wages","ya_co_caj","ya_prod", "ya_com_loc")])   #sample mean for firms
+fse <- c (plotrix::std.error(h1$ya_wages)*100,plotrix::std.error(h1$ya_co_caj)*100,plotrix::std.error(h1$ya_prod)*100, 
+          plotrix::std.error(h1$ya_com_loc)*100) #we multiply by 100 as we are in million of dollars and million of ounces
+stat_des_firm <- do.call(rbind, Map(data.frame,Variable=varnames.f, Mean=fcol_mean, Standard_error=fse))
+kable(stat_des_firm) %>% kable_material(c("striped", "hover"))
+rownames(stat_des_firm) <- c("Wage bill","Local purchases","Gold production","Percent local purchases")
+kable(stat_des_firm, format = "latex", booktabs = T, longtable=F, caption = "Table 2 : Summary statistics of firm") %>% kable_material(c("striped", "hover")) %>%
+  kable_styling() %>%
+  add_footnote("Wage bill and local purchases are measured in million of US$, while gold production is measured in million of ounces.", notation="alphabet")
+
+#------------------
+##Table 2 - Effect of Yanacocha's Expansion on Real Income
+#----------------
+#define one-hot encoding function
+dummy <- dummyVars(" ~ .", data=h1)
+#perform one-hot encoding on data frame
+final_df <- fastDummies::dummy_cols(h1)
+dummy_ciuu_cod=dummy_cols(final_df$ciuu_cod1)
+df1 <- caret::dummyVars(" ~ .", data=h1$p507)
+
+names(final_df)[names(final_df) == '_Ip507_2'] <- 'Ip507_2'
+names(final_df)[names(final_df) == '_Ip507_3'] <- 'Ip507_3'
+names(final_df)[names(final_df) == '_Ip507_4'] <- 'Ip507_4'
+names(final_df)[names(final_df) == '_Ip507_5'] <- 'Ip507_5'
+names(final_df)[names(final_df) == '_Ip507_6'] <- 'Ip507_6'
+names(final_df)[names(final_df) == '_Ip507_7'] <- 'Ip507_7'
+names(final_df)[names(final_df) == '_Iyear_1998'] <- 'Iyear_1998'
+names(final_df)[names(final_df) == '_Iyear_1999'] <- 'Iyear_1999'
+names(final_df)[names(final_df) == '_Iyear_2000'] <- 'Iyear_2000'
+names(final_df)[names(final_df) == '_Iyear_2001'] <- 'Iyear_2001'
+names(final_df)[names(final_df) == '_Iyear_2002'] <- 'Iyear_2002'
+names(final_df)[names(final_df) == '_Iyear_2003'] <- 'Iyear_2003'
+names(final_df)[names(final_df) == '_Iyear_2004'] <- 'Iyear_2004'
+names(final_df)[names(final_df) == '_Iyear_2005'] <- 'Iyear_2005'
+names(final_df)[names(final_df) == '_Iyear_2006'] <- 'Iyear_2006'
+names(final_df)[names(final_df) == '_Iciuu_cod1_2'] <- 'Iciuu_cod1_2'
+names(final_df)[names(final_df) == '_Iciuu_cod1_95'] <- 'Iciuu_cod1_95'
+table2df <- subset(final_df, select=Iciuu_cod1_2:Iciuu_cod1_95)
+names(table2df) <- gsub("_I", "I", names(table2df))
+table2df2 <- subset(final_df, select=c("ln_y","ln_ya_w_g2","d2","urban","Ip507_2","Ip507_3", "Ip507_4","Ip507_5","Ip507_6","Ip507_7",
+                                      "schooling","age","electricity","water","isfemale","mieperho","percepho",
+                                      "Iyear_1998", "Iyear_1999","Iyear_2000","Iyear_2001", "Iyear_2002","Iyear_2003","Iyear_2004"
+                                    ,"Iyear_2005","Iyear_2006","factor","dist_name","dep_name", "prov_name","year","p507","ubigeo","ciuu_cod1","lnworkers2","ln_ya_prod2","ln_yrel","distcont"))
+table2<- data.frame(table2df,table2df2)
+names(table2)[names(table2)=='ln_ya_w_g2'] <- 'lnyawg2'
+names(table2)[names(table2)=='ln_ya_prod2'] <- 'lnyaprod2'
+model <- plm(ln_y ~ lnyawg2*d2 + urban + factor(p507) + factor(ciuu_cod1) + schooling + age + electricity + water + isfemale + mieperho + percepho + factor(year),
+             data=table2,index = c('ubigeo', 'year') ,
+             model = "within", 
+             effect = "twoways")
+
+model1= lm(ln_y ~lnyawg2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+           ,data=table2, weights=table2$factor)
+model2= lm(ln_yrel ~lnyawg2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho ,data=table2, weights=table2$factor)
+model3= lm(ln_yrel ~lnworkers2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho,data=table2, weights=table2$factor)
+model4= lm(ln_yrel ~lnyaprod2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho ,data=table2, weights=table2$factor)
+model5= lm(ln_yrel ~lnyawg2*distcont +factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho,data=table2, weights=table2$factor)
+
+#Clustered standard errors
+model1_cr= lm_robust(ln_y ~lnyawg2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                  ,clusters = ubigeo,se_type = "stata",data=table2, weights=table2$factor)
+model2_cr= lm_robust(ln_yrel ~lnyawg2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+              ,clusters = ubigeo, se_type = "stata",data=table2, weights=table2$factor)
+model3_cr= lm_robust(ln_yrel ~lnworkers2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho
+                     ,clusters = ubigeo, se_type = "stata",data=table2, weights=table2$factor)
+model4_cr= lm_robust(ln_yrel ~lnyaprod2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                     ,clusters = ubigeo, se_type = "stata",data=table2, weights=table2$factor)
+model5_cr= lm_robust(ln_yrel ~lnyawg2*distcont +factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho
+                     ,clusters = ubigeo, se_type = "stata",data=table2, weights=table2$factor)
+mod.table2 <- list(model1, model2, model3, model4,model5)
+table.2=stargazer(mod.table2, type='text', align=TRUE, keep=c('lnyaprod2:d2','lnyawg2:distcont','lnworkers2:d2',
+                                                      'lnyawg2:d2'), column.labels = c("------ln(nominal income)------","--------------------------------------ln(real income)--------------------------------------"), 
+                  column.separate = c(2,3),se=list(c(model1_cr$std.error),c(model2_cr$std.error),c(model3_cr$std.error),c(model4_cr$std.error),c(model5_cr$std.error)),
+          add.lines = list(c("Measure of Mine activity", "Demand for local inputs","Demand for local inputs","Total number of workers", "Gold production", "Demand for local inputs")),
+          covariate.labels = c("Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Continuous distance"),
+          style='aer', dep.var.labels.include= FALSE,font.size = "small")
+#-----------------
+##Figure 4 - Effect of Yanacocha's Expansion on Real Income, by Distance to Cajamarca City
+#-----------------
+figure4df2<- subset(final_df, select="proxr")
+proxrdf <- fastDummies::dummy_cols(figure4df2)
+figure4df=data.frame(proxrdf,table2)
+fig4= lm(ln_yrel ~ln_ya_w_g2*factor(proxr)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+          ,data=h1,weights=h1$factor) #we estimate model 5 of table 2
+#we extract beta coefficients according to continuous distance from Cajamarca City
+coef_beta0=summary(fig4)$coefficients[165,1]
+coef_beta1=summary(fig4)$coefficients[166,1]
+coef_beta2=summary(fig4)$coefficients[167,1]
+coef_beta3=summary(fig4)$coefficients[168,1]
+coef_beta4=summary(fig4)$coefficients[169,1]
+proxr_beta <- c(coef_beta0,coef_beta1,coef_beta2,coef_beta3,coef_beta4)
+#confidence intervals
+ci=confint(fig4, c('ln_ya_w_g2:factor(proxr)1','ln_ya_w_g2:factor(proxr)2','ln_ya_w_g2:factor(proxr)3','ln_ya_w_g2:factor(proxr)4','ln_ya_w_g2:factor(proxr)5'), level=0.90)
+ci.low=c(ci[1,1],ci[2,1],ci[3,1],ci[4,1],ci[5,1])
+ci.high=c(ci[1,2],ci[2,2],ci[3,2],ci[4,2],ci[5,2])
+distance=c(1,2,3,4,5)
+#prepare data for the plot
+beta.ci=do.call(rbind, Map(data.frame, Beta=proxr_beta, CiLow=ci.low, CiHigh=ci.high, distance=distance))
+beta.ci.plot <- melt(beta.ci ,  id.vars = 'distance', variable.name = 'series')
+#plot
+ggplot(beta.ci.plot, aes(distance, value)) +
+  geom_line(aes(colour = series))+ geom_hline(yintercept=0, color="grey")+ 
+  geom_point()+
+  labs(x = "Distance from Cajamarca City",caption = "1=200km, 2=150km, 3=100km, 4=50km, 5=Cajamarca City", color=" ")+
+  scale_color_manual(labels = c("Point estimate", "90% Confidence intervals - upper bound","90% Confidence intervals - lower bound"), values = c("black", "azure4", "azure4"))+ 
+  theme(legend.position =c(0.47,0.99),legend.direction = "horizontal")
+
+#----------------
+#Table 3 - Table 3 - Yanacocha's Expansion and Other Measures of Well-Being
+#----------------
+table3df<- subset(h1, select=c("ln_expen","ln_ya_w_g2","d2","urban","p507","ciuu_cod1","schooling","age","electricity","water","isfemale","mieperho", 
+                               "percepho","year","ubigeo","factor","poor" ))
+model3_3df<- subset(data_person_4, select=c("ln_expen","ln_ya_w_g2","d2","urban","p507","ciuu_cod1","schooling","age","electricity","water","isfemale","mieperho", 
+                               "percepho","year","ubigeo","factor","poor","sewage" ,"sick","violence","codperso"))
+model4_3df<- subset(model3_3df, model3_3df$age<5)
+model5_3df<- subset(model3_3df, model3_3df$codperso==1)
+table3df1 <- table3df[!is.na(table3df$poor),]
+names(table3df)[names(table3df)=='ln_ya_w_g2'] <- 'lnyawg2'
+names(model3_3df)[names(model3_3df)=='ln_ya_w_g2'] <- 'lnyawg2'
+names(model4_3df)[names(model4_3df)=='ln_ya_w_g2'] <- 'lnyawg2'
+names(model5_3df)[names(model5_3df)=='ln_ya_w_g2'] <- 'lnyawg2'
+model1.3= lm(ln_expen~lnyawg2*d2+urban+factor(p507)+factor(ciuu_cod1)+ schooling +age+  electricity+ water+ isfemale+ mieperho+ percepho+factor(year)+factor(ubigeo)
+              ,data=table3df, weights=table3df$factor)
+model2.3= lm(poor~lnyawg2*d2+urban+factor(p507)+factor(ciuu_cod1)+ schooling +age+  electricity+ water+ isfemale+ mieperho+ percepho+factor(year)+factor(ubigeo)
+              ,data=table3df, weights=table3df$factor)
+model3.3= lm(sick~lnyawg2*d2+urban+water+sewage+electricity+isfemale+age+percepho+mieperho+factor(year)+factor(ubigeo)
+              ,data=model3_3df,weights=model3_3df$factor) #lm() automatically drop missing value, same number of observations as in the paper
+model4.3= lm(sick~lnyawg2*d2+urban+water+sewage+electricity+isfemale+age+percepho+mieperho+factor(year)+factor(ubigeo)
+              ,data=model4_3df,weights=model4_3df$factor) #lm() automatically drop missing value, same number of observations as in the paper
+model5.3= lm(violence~lnyawg2*d2+urban+water+sewage+electricity+percepho+mieperho+factor(year)+factor(ubigeo),
+              data=model5_3df, weights=model5_3df$factor) 
+#clustered robust standard errors
+model1.3_cr= lm_robust(ln_expen~lnyawg2*d2+urban+factor(p507)+factor(ciuu_cod1)+ schooling +age+  electricity+ water+ isfemale+ mieperho+ percepho+factor(year)+factor(ubigeo)
+                       ,clusters = ubigeo,se_type = "stata",data=table3df, weights=table3df$factor)
+model2.3_cr= lm_robust(poor~lnyawg2*d2+urban+factor(p507)+factor(ciuu_cod1)+ schooling +age+  electricity+ water+ isfemale+ mieperho+ percepho+factor(year)+factor(ubigeo)
+                       ,clusters = ubigeo,se_type = "stata",data=table3df, weights=table3df$factor)
+model3.3_cr= lm_robust(sick~lnyawg2*d2+urban+water+sewage+electricity+isfemale+age+percepho+mieperho+factor(year)+factor(ubigeo)
+                       ,data=model3_3df,weights=model3_3df$factor,clusters = ubigeo,se_type = "stata")
+model4.3_cr= lm_robust(sick~lnyawg2*d2+urban+water+sewage+electricity+isfemale+age+percepho+mieperho+factor(year)+factor(ubigeo)
+                       ,data=model4_3df,weights=model4_3df$factor,clusters = ubigeo,se_type = "stata")
+model5.3_cr= lm_robust(violence~lnyawg2*d2+urban+water+sewage+electricity+percepho+mieperho+factor(year)+factor(ubigeo),
+                       data=model5_3df, weights=model5_3df$factor,clusters = ubigeo,se_type = "stata")
+#create table
+mod.table3=list(model1.3,model2.3,model3.3,model4.3,model5.3)
+table.3=stargazer(mod.table3, type='text', align=TRUE, keep=c('lnyawg2:d2'), column.labels = c("ln(household consumption)","Poor","Health Problems","Crime"), 
+                  column.separate = c(1,1,2,1),se=list(c(model1.3_cr$std.error),c(model2.3_cr$std.error),c(model3.3_cr$std.error),c(model4.3_cr$std.error),c(model5.3_cr$std.error)),
+                  add.lines = list(c("Sample", "Households","Households","All individuals", "Children age <5", "Households")),
+                  covariate.labels = c("Demand for Local inputs x Distance < 100 km"),
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small")
+#----------------
+#Table 4 - Effect of Yanacocha's expansion on prices
+#---------------
+table4df<-subset(h1,select=c("ln_rent_a_n","ln_ya_w_g2","d2","year","dummy_altura","dummy_pob93","dummy_density","urban",     
+                                   "dummy_school","schooling","age","mieperho", "percepho","isfemale","town_size","p101","p102","p103","p104",
+                                   "phone", "water", "sewage", "electricity","ubigeo","ocu500","dominio","codperso","factor","price_papa_nom",
+                                   "price_maiz_nom","price_arroz_nom","price_azucar_nom","price_aceite_nom"))
+model1_4df <- table4df[!is.na(table4df$ln_rent_a_n),]
+model1_4df <- model1_4df[!is.na(model1_4df$p101),]
+model1_4df <- model1_4df[!is.na(model1_4df$p102),]
+model1_4df <- model1_4df[!is.na(model1_4df$p103),]
+model1_4df <- model1_4df[!is.na(model1_4df$p104),] #same number of variables as in the paper
+model1_4= lm(ln_rent_a_n ~ ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density+factor(year)*urban 
+              +factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale+factor(town_size)+factor(p101)+factor(p102)+factor(p103)
+              +p104+phone+water+sewage+electricity +factor(year) +factor(ubigeo),data=table4df, weights=table4df$factor)
+model2_4= lm(price_papa_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density 
+              +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale +factor(year)+factor(ubigeo),data=table4df, weights=table4df$factor)
+model3_4= lm(price_maiz_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density
+              +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale+factor(year)+factor(ubigeo),data=table4df, weights=table4df$factor)
+model4_4= lm(price_arroz_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density
+              +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale +factor(year)+factor(ubigeo) ,data=table4df,  weights=table4df$factor)
+model5_4= lm(price_azucar_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density 
+              +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale + factor(year) +factor(ubigeo),data=table4df, weights=table4df$factor)
+model6_4= lm(price_aceite_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density 
+              +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale + factor(year)+factor(ubigeo) ,data=table4df,weights=table4df$factor)
+#cluster robust standard errors
+model1.4_cr= lm_robust(ln_rent_a_n ~ ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density+factor(year)*urban 
+                       +factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale+factor(town_size)+factor(p101)+factor(p102)+factor(p103)
+                       +p104+phone+water+sewage+electricity +factor(year) +factor(ubigeo),data=table4df, weights=table4df$factor,clusters = ubigeo,se_type = "stata")
+model2.4_cr= lm_robust(price_papa_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density 
+                       +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale +factor(year)+factor(ubigeo),data=table4df, weights=table4df$factor,clusters = ubigeo,se_type = "stata")
+model3.4_cr= lm_robust(price_maiz_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density
+                       +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale+factor(year)+factor(ubigeo),data=table4df, weights=table4df$factor,clusters = ubigeo,se_type = "stata")
+model4.4_cr= lm_robust(price_arroz_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density
+                       +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale +factor(year)+factor(ubigeo) ,data=table4df,  weights=table4df$factor,clusters = ubigeo,se_type = "stata")
+model5.4_cr= lm_robust(price_azucar_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density 
+                       +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale + factor(year) +factor(ubigeo),data=table4df, weights=table4df$factor,clusters = ubigeo,se_type = "stata")
+model6.4_cr= lm_robust(price_aceite_nom~ln_ya_w_g2*d2+factor(year)*dummy_altura+factor(year)*dummy_pob93+factor(year)*dummy_density 
+                       +factor(year)*urban+factor(year)*dummy_school+schooling+age+mieperho+percepho+isfemale + factor(year)+factor(ubigeo) ,data=table4df,weights=table4df$factor,clusters = ubigeo,se_type = "stata")
+#create table
+mod.table4=list(model1_4,model2_4,model3_4,model4_4,model5_4,model6_4)
+table.4=stargazer(mod.table4, type='text', align=TRUE, keep=c('ln_ya_w_g2:d2'),
+                  column.labels = c("House rents", "Potatoes", "Maize", "Rice", "Sugar", "Cooking oil"), column.separate =c(1,1,1,1,1,1),
+                  se=list(c(model1.4_cr$std.error),c(model2.4_cr$std.error),c(model3.4_cr$std.error),c(model4.4_cr$std.error),c(model5.4_cr$std.error),c(model6.4_cr$std.error)),
+                  add.lines = list(c("Prices reported by:", "Homeowner", "Consumer", "Consumer", "Consumer", "Consumer", "Consumer"),
+                                   c("Food prices"," ","Local food prices","Local food prices"," Non Local food prices"," Non Local food prices"," Non Local food prices")),
+                  covariate.labels = c("Demand for Local inputs x Distance < 100 km",
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small"))
+##FAIRE TABLEAU AVEC LES DIFFERENTS MODELES
+#---------------
+# Table 5 - Effect of Yanacocha's Expansion by Occupation and Education
+#---------------
+table5df<- subset(h1, select=c("ln_yrel","ln_ya_w_g2","d3","urban","p507","ciuu_cod1","schooling","age","electricity","water","isfemale","mieperho","percepho",
+                               "year","ubigeo","factor","dmserv","farmer","schooling" ))
+dummy_d3=dummy_cols(h1$d3)
+names(dummy_d3)[names(dummy_d3) == '.data_0'] <- 'd3_0'
+names(dummy_d3)[names(dummy_d3) == '.data_1'] <- 'd3_1' #0-100km
+names(dummy_d3)[names(dummy_d3) == '.data_2'] <- 'd3_2' #cajamarca
+dummy_d3=subset(dummy_d3, select=c('d3_0','d3_1','d3_2'))
+table5df1 <- data.frame(table5df, dummy_d3)
+model2_5df<- subset(table5df1, table5df1$dmserv==1)
+model3_5df<- subset(table5df1, table5df1$farmer==1)
+model4_5df<- subset(table5df1, table5df1$schooling<=5)
+model5_5df<- subset(table5df1, table5df1$schooling>5)
+model1_5 =lm(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+                          ,data=table5df1, weights=table5df1$factor) 
+model2_5 =lm(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+              ,data=model2_5df, weights=model2_5df$factor)
+model3_5 =lm(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+              ,data=model3_5df, weights=model3_5df$factor)
+model4_5 =lm(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(ubigeo)+factor(year)
+              ,data=model4_5df, weights=model4_5df$factor)
+model5_5 =lm(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(ubigeo)+factor(year)
+              ,data=model5_5df, weights=model5_5df$factor)
+#cluster robust standard errors
+model1.5_cr= lm_robust(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+                       ,data=table5df1, weights=table5df1$factor,clusters = ubigeo,se_type = "stata")
+model2.5_cr= lm_robust(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+                       ,data=model2_5df, weights=model2_5df$factor,clusters = ubigeo,se_type = "stata")
+model3.5_cr= lm_robust(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+                       ,data=model3_5df, weights=model3_5df$factor,clusters = ubigeo,se_type = "stata")
+model4.5_cr= lm_robust(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(ubigeo)+factor(year)
+                       ,data=model4_5df, weights=model4_5df$factor,clusters = ubigeo,se_type = "stata")
+model5.5_cr= lm_robust(ln_yrel~ln_ya_w_g2*d3_2+ ln_ya_w_g2*d3_1+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(ubigeo)+factor(year)
+                       ,data=model5_5df, weights=model5_5df$factor,clusters = ubigeo,se_type = "stata")
+#create table
+mod.table5=list(model1_5,model2_5,model3_5,model4_5,model5_5)
+table.5=stargazer(mod.table5, type='text', align=TRUE, keep=c('ln_ya_w_g2:d3_2','ln_ya_w_g2:d3_1'),
+                  column.labels = c(" ", "By industry", "By education"), 
+                  se=list(c(model1.5_cr$std.error),c(model2.5_cr$std.error),c(model3.5_cr$std.error),c(model4.5_cr$std.error),c(model5.5_cr$std.error)),
+                  column.separate =c(1,2,2),covariate.labels = c("Demand for Local inputs x Cajamarca City","Demand for Local inputs x City hinterland" ),
+                  add.lines = list(c("Sample", "All", "Service workers", "Agricultural producers", "Unskilled workers", "Skilled workers")),
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small")
+#--------------
+#Figure 5: Average Canon per Capita by Location (in Nuevos Soles)
+#--------------
+fig5=subset(h1, h1$sample==1)
+fig5.far=subset(h1, h1$sample==1&d2==0)
+ggplot(data = fig5, mapping = aes(x = year, y = canon_p_nuevossoles, colour = factor(canon_3))) +
+  stat_summary(fun = "mean", geom = "line") +ylab("Average canon per capita")+
+  theme_bw()+theme(legend.title=element_blank())+
+  scale_color_manual(labels = c("No Cajamarca dep (close)", "Rest of Cajamarca (close)", "Cajamarca province"), values = c("green", "darkgreen", "black"))
+ggplot(data = fig5.far, mapping = aes(x = year, y = canon_p_nuevossoles, colour = factor(canon_3))) +
+  stat_summary(fun = "mean", geom = "line") +theme_bw()+ ylim(0,550)+theme(legend.title=element_blank())+ylab("Average canon per capita")+
+  scale_color_manual(labels = c("No Cajamarca dep (far)", "Rest of Cajamarca (far)"), values = c("green", "darkgreen"))
+#--------------
+#Table 6 - Effect of Yanacocha's Expansion on Real Income, Controlling for the Revenue Windfall
+#--------------
+table6df <- subset(h1, select=c("ln_yrel","ln_canon_p","ln_ya_w_g2","d2", "urban","p507","ciuu_cod1","schooling","age","electricity","water","isfemale", 
+                                "mieperho","percepho" ,"year","factor","ubigeo","caja_prov","dep"))
+model3_6df<- subset(table6df, table6df$dep!=6)
+model1_6 =lm(ln_yrel~ln_ya_w_g2*d2+ln_canon_p+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+              ,data=table6df,weights=table6df$factor)
+model2_6 =lm(ln_yrel~ln_ya_w_g2*d2+ln_canon_p+urban+factor(year)*caja_prov+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+              ,data=table6df, weights=table6df$factor)
+model3_6 =lm(ln_yrel~ln_ya_w_g2*d2+ln_canon_p+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+              ,data=model3_6df, weights=model3_6df$factor)
+#cluster robust standard errors
+model1.6_cr= lm_robust(ln_yrel~ln_ya_w_g2*d2+ln_canon_p+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+                       ,data=table6df,weights=table6df$factor,clusters = ubigeo,se_type = "stata")
+model2.6_cr= lm_robust(ln_yrel~ln_ya_w_g2*d2+ln_canon_p+urban+factor(year)*caja_prov+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+                       ,data=table6df, weights=table6df$factor,clusters = ubigeo,se_type = "stata")
+model3.6_cr= lm_robust(ln_yrel~ln_ya_w_g2*d2+ln_canon_p+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho+factor(year)+factor(ubigeo)
+                       ,data=model3_6df, weights=model3_6df$factor,clusters = ubigeo,se_type = "stata")
+#create table
+mod.table6=list(model1_6,model2_6,model3_6)
+table.6=stargazer(mod.table6, type='text', align=TRUE, keep=c('ln_ya_w_g2:d2','ln_canon_p'),column.labels = c("ln(real income)"), 
+                  se=list(c(model1.6_cr$std.error),c(model2.6_cr$std.error),c(model3.6_cr$std.error)),
+                  column.separate =c(3),covariate.labels = c("Ln(canon per capita)" ,"Demand for Local inputs x distance < 100km"),
+                  add.lines = list(c("Non-parametric trend x Cajamarca province", "No", "Yes", "No"), c("Sample","All","All","No Cajamarca department")),
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small")
+#---------------
+#Table 7 - Changes on Characteristics of Labor Force and Agricultural Activity
+#---------------
+table7df <- subset(data_person_4, data_person_4$ocu500!=4|is.na(data_person_4$ocu500) , select=c("schooling","ln_ya_w_g2","d2","year","ubigeo","factor","ocu500","prim_full","prime","nr_crop","concent_crop","farmer"))
+model4_7df <- subset(data_person_4, data_person_4$farmer==1&data_person_4$codperso==1, select=c("ln_ya_w_g2","d2","year","ubigeo","factor","ocu500","nr_crop","concent_crop","farmer"))
+model1_7 <- lm(schooling~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=table7df, weights=table7df$factor)
+model2_7 <- lm(prim_full~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=table7df, weights=table7df$factor)
+model3_7 <- lm(prime~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=table7df, weights=table7df$factor)
+model4_7 <- lm(nr_crop~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=model4_7df, weights=model4_7df$factor)
+model5_7 <- lm(concent_crop~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=model4_7df, weights=model4_7df$factor)
+#cluster robust standard errors
+model1.7_cr= lm_robust(schooling~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=table7df, weights=table7df$factor,clusters = ubigeo,se_type = "stata")
+model2.7_cr= lm_robust(prim_full~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=table7df, weights=table7df$factor,clusters = ubigeo,se_type = "stata")
+model3.7_cr= lm_robust(prime~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=table7df, weights=table7df$factor,clusters = ubigeo,se_type = "stata")
+model4.7_cr= lm_robust(nr_crop~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=model4_7df, weights=model4_7df$factor,clusters = ubigeo,se_type = "stata")
+model5.7_cr= lm_robust(concent_crop~ln_ya_w_g2*d2+factor(year)+factor(ubigeo),data=model4_7df, weights=model4_7df$factor,clusters = ubigeo,se_type = "stata")
+#create table
+mod.table7=list(model1_7,model2_7,model3_7,model4_7,model5_7)
+table.7=stargazer(mod.table7, type='text', align=TRUE, keep=c('ln_ya_w_g2:d2'),
+                  column.labels = c("years of education","complete primary","male in prime age","Number of crops","crop HH index"),
+                  covariate.labels = c("Demand for local inputs x Distance < 100 km"),
+                  se=list(c(model1.7_cr$std.error),c(model2.7_cr$std.error),c(model3.7_cr$std.error),c(model4.7_cr$std.error),c(model5.7_cr$std.error)),
+                  column.separate =c(1,1,1,1,1),
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small")
+
+#---------------
+#placebo
+h1.pre=subset(h1,h1$year==1997|h1$year==1998)
+model1.p= lm(ln_y ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+             ,data=h1.pre, weights=h1.pre$factor)
+model2.p= lm(ln_yrel ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho ,data=h1.pre, weights=h1.pre$factor)
+model3.p= lm(ln_yrel ~lnworkers2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho,data=h1.pre, weights=h1.pre$factor)
+model4.p= lm(ln_yrel ~ln_ya_prod2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho ,data=h1.pre, weights=h1.pre$factor)
+model5.p= lm(ln_yrel ~ln_ya_w_g2*distcont +factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho,data=h1.pre, weights=h1.pre$factor)
+mod.table2.p <- list(model1.p, model2.p, model3.p, model4.p,model5.p)
+#Clustered standard errors
+model1_cr.p= lm_robust(ln_y ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                       ,clusters = ubigeo,se_type = "stata",data=h1.pre, weights=h1.pre$factor)
+model2_cr.p= lm_robust(ln_yrel ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                       ,clusters = ubigeo, se_type = "stata",data=h1.pre, weights=h1.pre$factor)
+model3_cr.p= lm_robust(ln_yrel ~lnworkers2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho
+                       ,clusters = ubigeo, se_type = "stata",data=h1.pre, weights=h1.pre$factor)
+model4_cr.p= lm_robust(ln_yrel ~ln_ya_prod2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                       ,clusters = ubigeo, se_type = "stata",data=h1.pre, weights=h1.pre$factor)
+model5_cr.p= lm_robust(ln_yrel ~ln_ya_w_g2*distcont +factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho
+                       ,clusters = ubigeo, se_type = "stata",data=h1.pre, weights=h1.pre$factor)
+table.11=stargazer(mod.table2.p, type='text', align=TRUE, keep=c('ln_ya_prod2:d2','ln_ya_w_g2:distcont','lnworkers2:d2',
+                                                                'ln_ya_w_g2:d2'), column.labels = c("ln(nominal income)","ln(real income)") ,
+                  column.separate = c(2,3),se=list(c(model1_cr.p$std.error),c(model2_cr.p$std.error),c(model3_cr.p$std.error),c(model4_cr.p$std.error),c(model5_cr.p$std.error)),
+                  add.lines = list(c("Measure of Mine activity", "Demand for local inputs","Demand for local inputs","Total number of workers", "Gold production", "Demand for local inputs")),
+                  covariate.labels = c("Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Continuous distance"),
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small")
+#----------------
+#EXTANSION: effects of mine on women
+#---------------
+femaledf=subset(h1, h1$isfemale==1)
+model1.f= lm(ln_y ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+             ,data=femaledf, weights=femaledf$factor)
+model2.f= lm(ln_yrel ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho ,data=femaledf, weights=femaledf$factor)
+model3.f= lm(ln_yrel ~lnworkers2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho,data=femaledf, weights=femaledf$factor)
+model4.f= lm(ln_yrel ~ln_ya_prod2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho ,data=femaledf, weights=femaledf$factor)
+model5.f= lm(ln_yrel ~ln_ya_w_g2*distcont +factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho,data=femaledf, weights=femaledf$factor)
+mod.table2.f <- list(model1.f, model2.f, model3.f, model4.f,model5.f)
+#Clustered standard errors
+model1_cr.f= lm_robust(ln_y ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                     ,clusters = ubigeo,se_type = "stata",data=femaledf, weights=femaledf$factor)
+model2_cr.f= lm_robust(ln_yrel ~ln_ya_w_g2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                     ,clusters = ubigeo, se_type = "stata",data=femaledf, weights=femaledf$factor)
+model3_cr.f= lm_robust(ln_yrel ~lnworkers2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho
+                     ,clusters = ubigeo, se_type = "stata",data=femaledf, weights=femaledf$factor)
+model4_cr.f= lm_robust(ln_yrel ~ln_ya_prod2*d2+factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho 
+                     ,clusters = ubigeo, se_type = "stata",data=femaledf, weights=femaledf$factor)
+model5_cr.f= lm_robust(ln_yrel ~ln_ya_w_g2*distcont +factor(year)+factor(ubigeo)+urban+factor(p507)+factor(ciuu_cod1)+schooling+age+electricity+water+isfemale+mieperho+percepho
+                     ,clusters = ubigeo, se_type = "stata",data=femaledf, weights=femaledf$factor)
+table.10=stargazer(mod.table2.f, type='text', align=TRUE, keep=c('ln_ya_prod2:d2','ln_ya_w_g2:distcont','lnworkers2:d2',
+                                                              'ln_ya_w_g2:d2'), column.labels = c("ln(nominal income)","ln(real income)") ,
+                  column.separate = c(2,3),se=list(c(model1_cr.f$std.error),c(model2_cr.f$std.error),c(model3_cr.f$std.error),c(model4_cr.f$std.error),c(model5_cr.f$std.error)),
+                  add.lines = list(c("Measure of Mine activity", "Demand for local inputs","Demand for local inputs","Total number of workers", "Gold production", "Demand for local inputs")),
+                  covariate.labels = c("Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Continuous distance"),
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small")
+table.9.cr=stargazer(mod.table2.f, type='text', align=TRUE, keep=c('ln_ya_prod2:d2','ln_ya_w_g2:distcont','lnworkers2:d2',
+                                                                'ln_ya_w_g2:d2'), column.labels = c("ln(nominal income)","ln(real income)") ,
+                  column.separate = c(2,3),
+                  add.lines = list(c("Measure of Mine activity", "Demand for local inputs","Demand for local inputs","Total number of workers", "Gold production", "Demand for local inputs")),
+                  covariate.labels = c("Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Distance < 100 km","Mine activity x Continuous distance"),
+                  style='aer', dep.var.labels.include= FALSE,font.size = "small")
